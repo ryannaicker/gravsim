@@ -1,0 +1,8 @@
+build/
+build-debug/
+*.o
+*.csv
+*.png
+compile_commands.json
+.cache/
+.vscode/settings.json
