@@ -6,3 +6,4 @@ build-debug/
 compile_commands.json
 .cache/
 .vscode/settings.json
+!docs/figures/*.png

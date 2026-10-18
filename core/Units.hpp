@@ -1,3 +1,4 @@
+#pragma once
 // --- Derived constants of the unit system ------------------------------------
 //
 // DERIVATION OF THE TIME UNIT
