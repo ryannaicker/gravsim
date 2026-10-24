@@ -1,6 +1,6 @@
 #define DAY1 1
 #define DAY2 1
-#define DAY3 0
+#define DAY3 1
 #define DAY4 0
 #define DAY7 0
 
@@ -11,11 +11,12 @@
 #include "core/Integrator.hpp"
 #include "core/Diagnostics.hpp"
 #include "physics/Forces.hpp"
-//#include "physics/OrbitalElements.hpp"
+#include "physics/OrbitalElements.hpp"
 //#include "physics/CR3BP.hpp"
 //#include "physics/BarnesHut.hpp"
 #include "scenarios/Scenarios.hpp"
 #include <cstdio>
+#include <initializer_list>
 
 static AccelFn newtonAccel(double soft = 0.0){
     return [soft](const State& s, std::vector<Vec3>& a){ forces::newtonian(s, a, soft); };
@@ -133,6 +134,94 @@ int main()
         const double order = std::log2(err(500) / err(1000));
         std::printf("    measured order = %.3f\n", order);
         checkClose(order, 2.0, 0.25, "Verlet convergence order");
+    }
+#endif
+
+#if DAY3
+    section("Orbital elements round-trip");
+    {
+        OrbitalElements oe;
+        oe.a = 2.5; oe.e = 0.42; oe.i = 0.3; oe.Omega = 1.1; oe.omega = 2.2; oe.nu = 0.7;
+        Vec3 r, v;
+        elementsToState(oe, 1.0, r, v);
+        const OrbitalElements b = stateToElements(r, v, 1.0);
+        checkRel(b.a,     oe.a,     1e-12, "a");
+        checkRel(b.e,     oe.e,     1e-12, "e");
+        checkRel(b.i,     oe.i,     1e-12, "i");
+        checkRel(b.Omega, oe.Omega, 1e-12, "Omega");
+        checkRel(b.omega, oe.omega, 1e-12, "omega");
+        checkRel(b.nu,    oe.nu,    1e-12, "nu");
+    }
+
+    section("Round-trip at awkward angles (where acos would fail)");
+    {
+        int bad = 0;
+        for (double e : {0.1, 0.5, 0.9})
+            for (double nu : {0.0, units::PI, 1e-9})
+                for (double w : {0.0, units::PI}) {
+                    OrbitalElements oe; oe.a = 1.7; oe.e = e; oe.i = 0.4;
+                    oe.Omega = 1.0; oe.omega = w; oe.nu = nu;
+                    Vec3 r, v, r2, v2;
+                    elementsToState(oe, 1.0, r, v);
+                    elementsToState(stateToElements(r, v, 1.0), 1.0, r2, v2);
+                    if (norm(r2 - r) > 1e-12 * norm(r)) ++bad;
+                }
+        CHECK(bad == 0);
+    }
+
+    section("Kepler's equation");
+    {
+        for (double e : {0.0, 0.2, 0.6, 0.9})
+            for (double M : {0.1, 1.0, 3.0, 5.0}) {
+                const double E = solveKepler(M, e);
+                checkClose(E - e * std::sin(E), M, 1e-12, "Kepler residual");
+            }
+    }
+
+    section("Kepler III measured numerically");
+    {
+        for (double a : {0.5, 1.0, 2.0, 5.0}) {
+            State s = scenarios::twoBodyCircular(1.0, 1e-9, a);
+            VelocityVerlet ig; auto A = newtonAccel(); ig.init(s, A);
+            const double Tpred = orbitalPeriod(a, 1.0), h = Tpred / 4000.0;
+            double tprev = 0.0, yprev = (s.pos[1] - s.pos[0]).y, Tmeas = 0.0;
+            for (int k = 1; k < 20000; ++k) {
+                ig.step(s, h, A);
+                const double y = (s.pos[1] - s.pos[0]).y;
+                if (k > 10 && yprev < 0.0 && y >= 0.0) {          // crossed the x-axis upward
+                    Tmeas = tprev + h * (-yprev) / (y - yprev);     // interpolate the crossing
+                    break;
+                }
+                tprev = k * h; yprev = y;
+            }
+            checkRel(Tmeas, Tpred, 1e-3, "period vs Kepler III");
+        }
+    }
+
+    section("Eccentricity vector conserved (Newtonian)");
+    {
+        State s = scenarios::mercury();
+        const double mu = s.totalMass();
+        const Vec3 e0 = eccentricityVector(s.pos[1] - s.pos[0], s.vel[1] - s.vel[0], mu);
+        VelocityVerlet ig; auto A = newtonAccel(); ig.init(s, A);
+        const double T = orbitalPeriod(0.38709893, mu);
+        for (int k = 0; k < 4000 * 10; ++k) ig.step(s, T / 4000.0, A);   // 10 orbits
+        const Vec3 e1 = eccentricityVector(s.pos[1] - s.pos[0], s.vel[1] - s.vel[0], mu);
+        checkRel(norm(e1), norm(e0), 1e-8, "|e| conserved");
+        const double drift = std::atan2(e1.y, e1.x) - std::atan2(e0.y, e0.x);
+        std::printf("    e-vector direction drift over 10 orbits: %.3e rad\n", drift);
+        CHECK(std::fabs(drift) < 1e-4);
+    }
+
+    section("Halley's comet");
+    {
+        State s = scenarios::halley();
+        const OrbitalElements oe =
+            stateToElements(s.pos[1] - s.pos[0], s.vel[1] - s.vel[0], s.totalMass());
+        const double T = orbitalPeriod(oe.a, s.totalMass()) / units::YEAR;
+        std::printf("    period %.2f yr, perihelion %.3f AU, aphelion %.2f AU\n",
+                    T, oe.a * (1 - oe.e), oe.a * (1 + oe.e));
+        checkRel(T, 75.7, 1e-2, "Halley period ~75.7 yr");
     }
 #endif
 
