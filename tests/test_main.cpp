@@ -3,6 +3,7 @@
 #define DAY3 1
 #define DAY4 0
 #define DAY7 0
+#define SIM 1
 
 #include "tests/check.hpp"
 #include "core/Vec3.hpp"
@@ -17,6 +18,7 @@
 #include "scenarios/Scenarios.hpp"
 #include <cstdio>
 #include <initializer_list>
+#include "app/Simulation.hpp"
 
 static AccelFn newtonAccel(double soft = 0.0){
     return [soft](const State& s, std::vector<Vec3>& a){ forces::newtonian(s, a, soft); };
@@ -222,6 +224,50 @@ int main()
         std::printf("    period %.2f yr, perihelion %.3f AU, aphelion %.2f AU\n",
                     T, oe.a * (1 - oe.e), oe.a * (1 + oe.e));
         checkRel(T, 75.7, 1e-2, "Halley period ~75.7 yr");
+    }
+#endif
+
+#if SIM
+    section("Simulation: identical result at any frame rate");
+    {
+        const Preset p = presets()[1];     // Mercury
+        const long N = 20000;
+
+        // Deliver the same N steps in frames of different sizes.
+        // The maxSteps cap (N - steps so far) stops it overshooting N.
+        auto runFrames = [&](int stepsPerFrame) {
+            Simulation s; s.load(p);
+            while (s.steps() < N) s.advance(p.h * stepsPerFrame, int(N - s.steps()));
+            return s.state();
+        };
+        Simulation direct; direct.load(p); direct.stepN(N);     // no frames at all
+
+        const State fast = runFrames(7);     // like a fast frame rate
+        const State slow = runFrames(53);    // like a slow frame rate
+
+        bool same = true;
+        for (std::size_t i = 0; i < direct.state().size(); ++i) {
+            const Vec3& d = direct.state().pos[i];
+            same = same && d.x == fast.pos[i].x && d.y == fast.pos[i].y
+                        && d.x == slow.pos[i].x && d.y == slow.pos[i].y;
+        }
+        CHECK(same);     // EXACT equality on purpose: not "close", identical
+    }
+
+    section("Simulation: trail ring buffer");
+    {
+        const Preset p = presets()[0];     // Earth, trail point every step
+        Simulation s; s.load(p);
+        std::vector<Vec3> t;
+
+        s.stepN(10);                        // 1 initial point + 10 more
+        s.trail(1, t);
+        CHECK(t.size() == 11);
+
+        s.stepN(10000);                     // far more than TRAIL_LEN points
+        s.trail(1, t);
+        CHECK(t.size() == Simulation::TRAIL_LEN);               // capped, never grows
+        checkClose(norm(t.back() - s.state().pos[1]), 0.0, 1e-15, "newest point is current position");
     }
 #endif
 
